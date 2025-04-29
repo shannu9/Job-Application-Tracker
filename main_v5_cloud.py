@@ -1,5 +1,5 @@
 # Install required libraries (first time only)
-# pip install --upgrade openai google-api-python-client google-auth-httplib2 google-auth-oauthlib gspread oauth2client pandas beautifulsoup4
+# pip install --upgrade openai google-api-python-client google-auth-httplib2 google-auth-oauthlib gspread oauth2client pandas beautifulsoup4 rapidfuzz
 
 import os
 import pickle
@@ -11,6 +11,7 @@ import openai
 import pandas as pd
 from bs4 import BeautifulSoup
 from datetime import datetime, timezone
+from rapidfuzz import fuzz
 from google.auth.transport.requests import Request
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
@@ -30,6 +31,13 @@ OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
 
 openai.api_key = OPENAI_API_KEY
 client = openai.OpenAI()
+
+STATUS_COLOR_MAP = {
+    "Applied": "Blue",
+    "Interview Scheduled": "Orange",
+    "Offer": "Green",
+    "Rejected": "Red"
+}
 
 # ---- FUNCTIONS ----
 
@@ -146,30 +154,41 @@ def analyze_email_with_openai(subject, body):
         return {"is_job_related": False}
 
 
+def find_matching_row(df, company, job_title):
+    for index, row in df.iterrows():
+        if row['Company'].lower() == company.lower():
+            similarity = fuzz.partial_ratio(row['Job Title'].lower(), job_title.lower())
+            if similarity > 85:
+                return index
+    return None
+
+
 def update_google_sheet(sheet_client, data_rows):
     sheet = sheet_client.open_by_key(GOOGLE_SHEET_ID).sheet1
     records = sheet.get_all_records()
     df = pd.DataFrame(records)
 
-    header = ['Date', 'Company', 'Job Title', 'Status', 'Recruiter Email', 'Email Link', 'Account Email', 'Last Updated']
+    header = ['Date', 'Company', 'Job Title', 'Status', 'Status Color', 'Recruiter Email', 'Email Link', 'Account Email', 'Last Updated']
     if df.empty:
         sheet.append_row(header)
         df = pd.DataFrame(columns=header)
 
     for new_row in data_rows:
         date, company, job_title, status, recruiter_email, email_link, account_email = new_row
-        existing = df[(df['Company'] == company) & (df['Job Title'] == job_title)]
-        if not existing.empty:
-            index = existing.index[0]
-            df.at[index, 'Status'] = status
-            df.at[index, 'Recruiter Email'] = recruiter_email
-            df.at[index, 'Last Updated'] = datetime.now().strftime('%Y-%m-%d %H:%M')
+        status_color = STATUS_COLOR_MAP.get(status, "")
+        match_index = find_matching_row(df, company, job_title)
+        if match_index is not None:
+            df.at[match_index, 'Status'] = status
+            df.at[match_index, 'Status Color'] = status_color
+            df.at[match_index, 'Recruiter Email'] = recruiter_email
+            df.at[match_index, 'Last Updated'] = datetime.now().strftime('%Y-%m-%d %H:%M')
         else:
             new_entry = {
                 'Date': date,
                 'Company': company,
                 'Job Title': job_title,
                 'Status': status,
+                'Status Color': status_color,
                 'Recruiter Email': recruiter_email,
                 'Email Link': email_link,
                 'Account Email': account_email,
@@ -207,7 +226,7 @@ def main():
                 if analysis.get("is_job_related"):
                     status = analysis.get("status", "Applied")
                     all_data.append([
-                        datetime.utcfromtimestamp(internal_date).strftime('%Y-%m-%d'),
+                        datetime.fromtimestamp(internal_date, tz=timezone.utc).strftime('%Y-%m-%d'),
                         from_email.split('@')[0],
                         subject,
                         status,
