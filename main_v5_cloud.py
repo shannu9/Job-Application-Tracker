@@ -20,13 +20,13 @@ from oauth2client.service_account import ServiceAccountCredentials
 # ---- SETTINGS ----
 GMAIL_CREDENTIALS_FILE = 'credentials_gmail.json'
 SHEET_CREDENTIALS_FILE = 'credentials_sheets.json'
-GOOGLE_SHEET_ID = 'your-google-sheet-id-here'
+GOOGLE_SHEET_ID = os.getenv('GOOGLE_SHEET_ID')
 GMAIL_SCOPES = ['https://www.googleapis.com/auth/gmail.readonly']
 SHEET_SCOPES = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
 TOKEN_DIR = 'tokens/'
 LAST_PROCESSED_FILE = 'last_processed.txt'
 CHECK_INTERVAL_SECONDS = 900  # 15 minutes
-OPENAI_API_KEY = 'your-openai-api-key-here'
+OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
 
 openai.api_key = OPENAI_API_KEY
 
@@ -61,8 +61,10 @@ def get_last_processed_timestamp():
         with open(LAST_PROCESSED_FILE, 'r') as f:
             return int(f.read().strip())
     else:
-        start_date = input("Enter the starting date to fetch emails after (YYYY-MM-DD): ")
-        dt = datetime.strptime(start_date, '%Y-%m-%d')
+        start_date_env = os.getenv('START_DATE', None)
+        if not start_date_env:
+            raise Exception("Environment variable START_DATE is required on first run!")
+        dt = datetime.strptime(start_date_env, '%Y-%m-%d')
         timestamp = int(dt.replace(tzinfo=timezone.utc).timestamp())
         return timestamp
 
@@ -179,7 +181,12 @@ def update_google_sheet(sheet_client, data_rows):
 
 def main():
     os.makedirs(TOKEN_DIR, exist_ok=True)
-    account_names = input("Enter Gmail account names (comma separated, ex: user1,user2): ").split(',')
+    account_names = os.getenv('GMAIL_ACCOUNTS', '').split(',')
+    account_names = [acc.strip() for acc in account_names if acc.strip()]
+
+    if not account_names:
+        raise Exception("GMAIL_ACCOUNTS environment variable is required!")
+
     all_data = []
     last_timestamp = get_last_processed_timestamp()
 
