@@ -29,6 +29,7 @@ TOKEN_DIR = 'tokens/'
 LAST_PROCESSED_FILE = 'last_processed.txt'
 CHECK_INTERVAL_SECONDS = 900  # 15 minutes
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
+USE_AI = os.getenv('USE_AI', 'false').lower() == 'true'
 
 openai.api_key = OPENAI_API_KEY
 client = openai.OpenAI()
@@ -148,6 +149,19 @@ def analyze_email_with_openai(subject, body):
         return {"is_job_related": False}
 
 
+def rule_based_classify(subject, body):
+    text = f"{subject} {body}".lower()
+    if any(kw in text for kw in ["offer", "we are pleased to", "congratulations"]):
+        return {"is_job_related": True, "status": "Offer"}
+    if any(kw in text for kw in ["interview", "zoom", "meet", "scheduled", "calendar invite"]):
+        return {"is_job_related": True, "status": "Interview Scheduled"}
+    if any(kw in text for kw in ["not moving forward", "unfortunately", "we regret", "thank you for your interest"]):
+        return {"is_job_related": True, "status": "Rejected"}
+    if any(kw in text for kw in ["applied", "application", "submission received", "thank you for applying", "you applied"]):
+        return {"is_job_related": True, "status": "Applied"}
+    return {"is_job_related": False}
+
+
 def find_matching_row(df, company, job_title):
     for index, row in df.iterrows():
         if row['Company'].lower() == company.lower():
@@ -158,6 +172,31 @@ def find_matching_row(df, company, job_title):
 
 
 def create_or_update_dashboard(sheet_client):
+    sheet = sheet_client.open_by_key(GOOGLE_SHEET_ID)
+    records = sheet.worksheet("Sheet1").get_all_records()
+    df = pd.DataFrame(records)
+
+    # Status Summary
+    status_counts = Counter(df['Status'])
+    status_section = [["Status", "Count"]] + [[k, v] for k, v in status_counts.items()]
+
+    # Add spacing row
+    spacer = [[], []]
+
+    # Detection Mode Summary
+    mode_counts = Counter(df['Detection Mode'])
+    mode_section = [["Detection Mode", "Count"]] + [[k, v] for k, v in mode_counts.items()]
+
+    # Combine all parts
+    dashboard_data = status_section + spacer + mode_section
+
+    try:
+        dash = sheet.worksheet("Dashboard")
+    except:
+        dash = sheet.add_worksheet(title="Dashboard", rows="20", cols="2")
+
+    dash.clear()
+    dash.update(dashboard_data)
     sheet = sheet_client.open_by_key(GOOGLE_SHEET_ID)
     records = sheet.worksheet("Sheet1").get_all_records()
     df = pd.DataFrame(records)
@@ -179,16 +218,17 @@ def update_google_sheet(sheet_client, data_rows):
     records = sheet.get_all_records()
     df = pd.DataFrame(records)
 
-    header = ['Date', 'Company', 'Job Title', 'Status', 'Recruiter Email', 'Email Link', 'Account Email', 'Last Updated']
+    header = ['Date', 'Company', 'Job Title', 'Status', 'Detection Mode', 'Recruiter Email', 'Email Link', 'Account Email', 'Last Updated']
     if df.empty:
         sheet.append_row(header)
         df = pd.DataFrame(columns=header)
 
     for new_row in data_rows:
-        date, company, job_title, status, recruiter_email, email_link, account_email = new_row
+        date, company, job_title, status, mode, recruiter_email, email_link, account_email = new_row
         match_index = find_matching_row(df, company, job_title)
         if match_index is not None:
             df.at[match_index, 'Status'] = status
+            df.at[match_index, 'Detection Mode'] = mode
             df.at[match_index, 'Recruiter Email'] = recruiter_email
             df.at[match_index, 'Last Updated'] = datetime.now().strftime('%Y-%m-%d %H:%M')
         else:
@@ -197,6 +237,7 @@ def update_google_sheet(sheet_client, data_rows):
                 'Company': company,
                 'Job Title': job_title,
                 'Status': status,
+                'Detection Mode': mode,
                 'Recruiter Email': recruiter_email,
                 'Email Link': email_link,
                 'Account Email': account_email,
@@ -231,7 +272,13 @@ def main():
 
             for m in messages:
                 subject, body, from_email, link, internal_date = extract_email_data(service, m['id'])
-                analysis = analyze_email_with_openai(subject, body)
+                if USE_AI:
+                    analysis = analyze_email_with_openai(subject, body)
+                    mode = "GPT-3.5"
+                else:
+                    analysis = rule_based_classify(subject, body)
+                    mode = "Rule-Based"
+
                 if analysis.get("is_job_related"):
                     status = analysis.get("status", "Applied")
                     all_data.append([
@@ -239,6 +286,7 @@ def main():
                         from_email.split('@')[0],
                         subject,
                         status,
+                        mode,
                         from_email,
                         link,
                         account_name
