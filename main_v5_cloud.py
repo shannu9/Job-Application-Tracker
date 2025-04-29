@@ -76,7 +76,7 @@ def save_last_processed_timestamp(timestamp):
 
 
 def search_new_emails(service, after_timestamp):
-    query = f'newer_than:2d (subject:application OR subject:interview OR subject:offer OR subject:thank OR subject:hiring)'
+    query = '(subject:application OR subject:interview OR subject:offer OR subject:thank OR subject:hiring)'
     response = service.users().messages().list(userId='me', q=query, maxResults=100).execute()
     messages = response.get('messages', [])
 
