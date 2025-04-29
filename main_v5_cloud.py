@@ -29,6 +29,7 @@ CHECK_INTERVAL_SECONDS = 900  # 15 minutes
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
 
 openai.api_key = OPENAI_API_KEY
+client = openai.OpenAI()
 
 # ---- FUNCTIONS ----
 
@@ -130,16 +131,18 @@ def analyze_email_with_openai(subject, body):
     {{"is_job_related": true/false, "status": "Applied/Interview Scheduled/Offer/Rejected"}}
     """
 
-    response = openai.ChatCompletion.create(
+    response = client.chat.completions.create(
         model="gpt-3.5-turbo",
         messages=[{"role": "user", "content": prompt}],
         temperature=0
     )
 
-    content = response['choices'][0]['message']['content']
+    content = response.choices[0].message.content
+
     try:
         return json.loads(content)
-    except:
+    except Exception as e:
+        print(f"Error parsing OpenAI response: {e}")
         return {"is_job_related": False}
 
 
