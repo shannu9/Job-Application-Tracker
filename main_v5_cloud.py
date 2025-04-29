@@ -12,6 +12,7 @@ import pandas as pd
 from bs4 import BeautifulSoup
 from datetime import datetime, timezone
 from rapidfuzz import fuzz
+from collections import Counter
 from google.auth.transport.requests import Request
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
@@ -31,13 +32,6 @@ OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
 
 openai.api_key = OPENAI_API_KEY
 client = openai.OpenAI()
-
-STATUS_COLOR_MAP = {
-    "Applied": "Blue",
-    "Interview Scheduled": "Orange",
-    "Offer": "Green",
-    "Rejected": "Red"
-}
 
 # ---- FUNCTIONS ----
 
@@ -163,23 +157,38 @@ def find_matching_row(df, company, job_title):
     return None
 
 
+def create_or_update_dashboard(sheet_client):
+    sheet = sheet_client.open_by_key(GOOGLE_SHEET_ID)
+    records = sheet.worksheet("Sheet1").get_all_records()
+    df = pd.DataFrame(records)
+    status_counts = Counter(df['Status'])
+
+    dashboard_data = [["Status", "Count"]] + [[k, v] for k, v in status_counts.items()]
+
+    try:
+        dash = sheet.worksheet("Dashboard")
+    except:
+        dash = sheet.add_worksheet(title="Dashboard", rows="10", cols="2")
+
+    dash.clear()
+    dash.update(dashboard_data)
+
+
 def update_google_sheet(sheet_client, data_rows):
     sheet = sheet_client.open_by_key(GOOGLE_SHEET_ID).sheet1
     records = sheet.get_all_records()
     df = pd.DataFrame(records)
 
-    header = ['Date', 'Company', 'Job Title', 'Status', 'Status Color', 'Recruiter Email', 'Email Link', 'Account Email', 'Last Updated']
+    header = ['Date', 'Company', 'Job Title', 'Status', 'Recruiter Email', 'Email Link', 'Account Email', 'Last Updated']
     if df.empty:
         sheet.append_row(header)
         df = pd.DataFrame(columns=header)
 
     for new_row in data_rows:
         date, company, job_title, status, recruiter_email, email_link, account_email = new_row
-        status_color = STATUS_COLOR_MAP.get(status, "")
         match_index = find_matching_row(df, company, job_title)
         if match_index is not None:
             df.at[match_index, 'Status'] = status
-            df.at[match_index, 'Status Color'] = status_color
             df.at[match_index, 'Recruiter Email'] = recruiter_email
             df.at[match_index, 'Last Updated'] = datetime.now().strftime('%Y-%m-%d %H:%M')
         else:
@@ -188,7 +197,6 @@ def update_google_sheet(sheet_client, data_rows):
                 'Company': company,
                 'Job Title': job_title,
                 'Status': status,
-                'Status Color': status_color,
                 'Recruiter Email': recruiter_email,
                 'Email Link': email_link,
                 'Account Email': account_email,
@@ -199,6 +207,7 @@ def update_google_sheet(sheet_client, data_rows):
     df = df.fillna('')
     sheet.clear()
     sheet.update([df.columns.values.tolist()] + df.values.tolist())
+    create_or_update_dashboard(sheet_client)
 
 
 def main():
