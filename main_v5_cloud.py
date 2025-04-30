@@ -62,7 +62,7 @@ def authenticate_google_sheets():
 def get_last_processed_timestamp():
     if os.path.exists(LAST_PROCESSED_FILE):
         with open(LAST_PROCESSED_FILE, 'r') as f:
-            return int(f.read().strip())
+            return int(float(f.read().strip()))
     else:
         start_date_env = os.getenv('START_DATE', None)
         if not start_date_env:
