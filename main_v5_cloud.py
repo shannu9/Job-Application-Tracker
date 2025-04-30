@@ -29,7 +29,6 @@ TOKEN_DIR = 'tokens/'
 LAST_PROCESSED_FILE = 'last_processed.txt'
 CHECK_INTERVAL_SECONDS = 900  # 15 minutes
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
-USE_AI = os.getenv('USE_AI', 'false').lower() == 'true'
 
 openai.api_key = OPENAI_API_KEY
 client = openai.OpenAI()
@@ -176,38 +175,20 @@ def create_or_update_dashboard(sheet_client):
     records = sheet.worksheet("Sheet1").get_all_records()
     df = pd.DataFrame(records)
 
-    # Status Summary
     status_counts = Counter(df['Status'])
     status_section = [["Status", "Count"]] + [[k, v] for k, v in status_counts.items()]
 
-    # Add spacing row
     spacer = [[], []]
 
-    # Detection Mode Summary
     mode_counts = Counter(df['Detection Mode'])
     mode_section = [["Detection Mode", "Count"]] + [[k, v] for k, v in mode_counts.items()]
 
-    # Combine all parts
     dashboard_data = status_section + spacer + mode_section
 
     try:
         dash = sheet.worksheet("Dashboard")
     except:
         dash = sheet.add_worksheet(title="Dashboard", rows="20", cols="2")
-
-    dash.clear()
-    dash.update(dashboard_data)
-    sheet = sheet_client.open_by_key(GOOGLE_SHEET_ID)
-    records = sheet.worksheet("Sheet1").get_all_records()
-    df = pd.DataFrame(records)
-    status_counts = Counter(df['Status'])
-
-    dashboard_data = [["Status", "Count"]] + [[k, v] for k, v in status_counts.items()]
-
-    try:
-        dash = sheet.worksheet("Dashboard")
-    except:
-        dash = sheet.add_worksheet(title="Dashboard", rows="10", cols="2")
 
     dash.clear()
     dash.update(dashboard_data)
@@ -272,26 +253,34 @@ def main():
 
             for m in messages:
                 subject, body, from_email, link, internal_date = extract_email_data(service, m['id'])
-                if USE_AI:
-                    analysis = analyze_email_with_openai(subject, body)
-                    mode = "GPT-3.5"
-                else:
-                    analysis = rule_based_classify(subject, body)
-                    mode = "Rule-Based"
+                rule_result = rule_based_classify(subject, body)
+                gpt_result = analyze_email_with_openai(subject, body)
 
-                if analysis.get("is_job_related"):
-                    status = analysis.get("status", "Applied")
-                    all_data.append([
-                        datetime.fromtimestamp(internal_date, tz=timezone.utc).strftime('%Y-%m-%d'),
-                        from_email.split('@')[0],
-                        subject,
-                        status,
-                        mode,
-                        from_email,
-                        link,
-                        account_name
-                    ])
-                    last_timestamp = max(last_timestamp, internal_date)
+                if not rule_result["is_job_related"] and not gpt_result["is_job_related"]:
+                    continue
+
+                status = rule_result["status"] if rule_result["is_job_related"] else "Unknown"
+                detection_mode = "Rule-Based Only"
+
+                if gpt_result["is_job_related"]:
+                    if gpt_result["status"] == status:
+                        detection_mode = "GPT-3.5 + Rule-Based (agree)"
+                    else:
+                        detection_mode = f"GPT-3.5 + Rule-Based (disagree: {status})"
+                    status = gpt_result["status"]
+
+                all_data.append([
+                    datetime.fromtimestamp(internal_date, tz=timezone.utc).strftime('%Y-%m-%d'),
+                    from_email.split('@')[0],
+                    subject,
+                    status,
+                    detection_mode,
+                    from_email,
+                    link,
+                    account_name
+                ])
+
+                last_timestamp = max(last_timestamp, internal_date)
 
         if all_data:
             sheets_client = authenticate_google_sheets()
